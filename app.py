@@ -151,7 +151,7 @@ def run_app():
     🏥 Center: {config.CENTER_NAME}
     📞 Phone: {config.CENTER_PHONE}
     🌐 Server: http://{config.FLASK_HOST}:{config.FLASK_PORT}
-    🤖 Model: {config.LLM_MODEL}
+    🤖 Model: {config.GEMINI_MODEL}
     💾 Vector DB: {config.COLLECTION_NAME}
     
     """)

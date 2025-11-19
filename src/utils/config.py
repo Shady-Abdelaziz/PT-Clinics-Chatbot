@@ -16,10 +16,10 @@ class Config:
         env_path = Path(__file__).parent.parent.parent / ".env"
         load_dotenv(env_path)
         
-        # OpenRouter Configuration (for LLM)
-        self.OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "deepseek/deepseek-chat-v3-0324:free")
-        self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+        # Google Gemini Configuration (for LLM)
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+        self.GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         
         # Ollama Configuration (for Embeddings - Local, Free)
         self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -27,7 +27,6 @@ class Config:
         
         # Common settings
         self.LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-        self.LLM_THINKING_ENABLED = os.getenv("LLM_THINKING_ENABLED", "true").lower() == "true"
         
         # Qdrant Configuration
         self.QDRANT_URL = os.getenv("QDRANT_URL")
@@ -76,7 +75,7 @@ class Config:
         required_fields = [
             ("QDRANT_URL", self.QDRANT_URL),
             ("QDRANT_API_KEY", self.QDRANT_API_KEY),
-            ("OPENROUTER_API_KEY", self.OPENROUTER_API_KEY),
+            ("GEMINI_API_KEY", self.GEMINI_API_KEY),
         ]
         
         missing_fields = [field for field, value in required_fields if not value]

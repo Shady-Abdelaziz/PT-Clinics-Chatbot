@@ -88,6 +88,63 @@ class MedicalCenterChatbot:
         
         return None
     
+    def _normalize_time_for_comparison(self, time_str: str) -> Optional[str]:
+        """
+        Normalize time to a standard format for comparison purposes only.
+        Converts various time formats to 24-hour HH:MM format for comparison.
+        
+        Args:
+            time_str: Time in various formats like "10", "10:00", "10 AM", "10:00 AM"
+            
+        Returns:
+            Normalized time in 24-hour format like "10:00" or "14:30"
+        """
+        import re
+        
+        time_str = time_str.strip().upper()
+        
+        # If already in 24-hour format (HH:MM)
+        if re.match(r'^\d{2}:\d{2}$', time_str):
+            return time_str
+        
+        # If in 12-hour format with AM/PM (HH:MM AM/PM)
+        match = re.match(r'^(\d{1,2}):(\d{2})\s*([AP]M)$', time_str)
+        if match:
+            hour = int(match.group(1))
+            minutes = match.group(2)
+            am_pm = match.group(3)
+            
+            # Convert to 24-hour
+            if am_pm == 'PM' and hour != 12:
+                hour += 12
+            elif am_pm == 'AM' and hour == 12:
+                hour = 0
+            
+            return f"{hour:02d}:{minutes}"
+        
+        # If just hour with AM/PM
+        match = re.match(r'^(\d{1,2})\s*([AP]M)$', time_str)
+        if match:
+            hour = int(match.group(1))
+            am_pm = match.group(2)
+            
+            # Convert to 24-hour
+            if am_pm == 'PM' and hour != 12:
+                hour += 12
+            elif am_pm == 'AM' and hour == 12:
+                hour = 0
+            
+            return f"{hour:02d}:00"
+        
+        # If just a number
+        match = re.match(r'^(\d{1,2})$', time_str)
+        if match:
+            hour = int(match.group(1))
+            if hour <= 23:
+                return f"{hour:02d}:00"
+        
+        return None
+    
     def _normalize_time(self, time_str: str) -> Optional[str]:
         """
         Normalize time format to 24-hour format (HH:MM)
@@ -205,28 +262,54 @@ class MedicalCenterChatbot:
         
         return None
     
-    def _call_openrouter_llm(self, messages: List[Dict[str, str]]) -> str:
-        """Call OpenRouter LLM directly"""
+    def _call_gemini_llm(self, messages: List[Dict[str, str]]) -> str:
+        """Call Google Gemini LLM directly"""
         try:
-            headers = {
-                "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://medical-center-chatbot.local",
-                "X-Title": "Medical Center Chatbot"
-            }
+            # Convert messages to Gemini format
+            # Gemini uses 'contents' with 'role' (user/model) and 'parts' structure
+            gemini_contents = []
+            system_instruction = None
             
+            for msg in messages:
+                role = msg['role']
+                content = msg['content']
+                
+                # Extract system message separately
+                if role == 'system':
+                    system_instruction = content
+                    continue
+                
+                # Convert role names (assistant -> model for Gemini)
+                gemini_role = 'model' if role == 'assistant' else 'user'
+                
+                gemini_contents.append({
+                    'role': gemini_role,
+                    'parts': [{'text': content}]
+                })
+            
+            # Build the API payload
             payload = {
-                "model": config.LLM_MODEL,
-                "messages": messages,
-                "temperature": config.LLM_TEMPERATURE,
-                "max_tokens": 4080,
-                "thinking": {
-                    "type": "enabled" if config.LLM_THINKING_ENABLED else "disabled"
+                'contents': gemini_contents,
+                'generationConfig': {
+                    'temperature': config.LLM_TEMPERATURE,
+                    'maxOutputTokens': 4096,
                 }
             }
             
+            # Add system instruction if present
+            if system_instruction:
+                payload['systemInstruction'] = {
+                    'parts': [{'text': system_instruction}]
+                }
+            
+            # Make API call
+            url = f"{config.GEMINI_BASE_URL}/models/{config.GEMINI_MODEL}:generateContent"
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
             response = requests.post(
-                f"{config.OPENROUTER_BASE_URL}/chat/completions",
+                f"{url}?key={config.GEMINI_API_KEY}",
                 headers=headers,
                 json=payload,
                 timeout=60
@@ -234,9 +317,22 @@ class MedicalCenterChatbot:
             
             if response.status_code == 200:
                 data = response.json()
-                return data['choices'][0]['message']['content']
+                # Extract text from Gemini response
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    candidate = data['candidates'][0]
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        text_parts = [part.get('text', '') for part in candidate['content']['parts']]
+                        return ''.join(text_parts)
+                return "Sorry, I couldn't generate a response."
             else:
-                return f"Error: {response.status_code} - {response.text}"
+                error_msg = response.text
+                try:
+                    error_data = response.json()
+                    if 'error' in error_data:
+                        error_msg = error_data['error'].get('message', error_msg)
+                except:
+                    pass
+                return f"Error: {response.status_code} - {error_msg}"
         except Exception as e:
             return f"Sorry, I encountered an error: {str(e)}"
     
@@ -448,15 +544,47 @@ class MedicalCenterChatbot:
                 if not all([time_raw, patient_name, phone]):
                     return "To book an appointment, I need: doctor name, date, time, patient name, and phone number."
                 
-                # Normalize time format
-                time = self._normalize_time(time_raw)
-                if not time:
+                # CRITICAL FIX: Verify slot is actually available BEFORE attempting to book
+                # This prevents booking errors when conversation context is lost
+                available_slots = excel_manager.get_available_slots(doctor_name, date, limit=100)
+                
+                # Normalize the time format for comparison
+                time_normalized = self._normalize_time_for_comparison(time_raw)
+                if not time_normalized:
                     return f"Invalid time format: '{time_raw}'. Please use format like '10:00 AM' or '02:30 PM'."
                 
+                # Check if requested time slot exists and is available
+                slot_available = False
+                matching_time_in_excel = None
+                for slot in available_slots:
+                    slot_time_normalized = self._normalize_time_for_comparison(slot['time'])
+                    if slot['date'] == date and slot_time_normalized == time_normalized:
+                        slot_available = True
+                        matching_time_in_excel = slot['time']  # Use the exact format from Excel
+                        break
+                
+                if not slot_available:
+                    # Slot not available - provide helpful alternatives
+                    if available_slots:
+                        from collections import defaultdict
+                        slots_by_date = defaultdict(list)
+                        for slot in available_slots[:20]:  # Show up to 20 alternative slots
+                            slots_by_date[slot['date']].append(slot['time'])
+                        
+                        alternatives = f"I apologize, but {doctor_name} isn't available on {date} at {time_raw}. Here are alternative slots:\n\n"
+                        for date_key in sorted(slots_by_date.keys())[:5]:  # Show up to 5 dates
+                            times = slots_by_date[date_key]
+                            alternatives += f"📅 {date_key}:\n   {', '.join(times[:10])}\n\n"  # Show up to 10 times per date
+                        
+                        return alternatives
+                    else:
+                        return f"I apologize, but {doctor_name} has no available slots at this time. Please try another doctor or check back later."
+                
+                # Slot is confirmed available - proceed with booking using Excel's exact time format
                 success, message = excel_manager.book_appointment(
                     doctor_name=doctor_name,
                     date=date,
-                    time=time,
+                    time=matching_time_in_excel,  # Use exact format from Excel
                     patient_name=patient_name,
                     phone=phone
                 )
@@ -729,7 +857,7 @@ Always be helpful and provide accurate information."""
         messages.extend(context)
         
         # Call LLM
-        llm_response = self._call_openrouter_llm(messages)
+        llm_response = self._call_gemini_llm(messages)
         
         # Check if LLM wants to call a function
         function_call = self._extract_function_call(llm_response)
@@ -754,7 +882,7 @@ Always be helpful and provide accurate information."""
                 "content": "Based on the function result above, provide a helpful response to my original question. Remember our conversation context."
             })
             
-            final_response = self._call_openrouter_llm(follow_up_messages)
+            final_response = self._call_gemini_llm(follow_up_messages)
             
             # Add to memory
             self.memory.add_ai_message(final_response)

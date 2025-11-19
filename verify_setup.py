@@ -1,6 +1,6 @@
 """
-Setup Verification Script
-Checks if all dependencies and services are properly configured
+Setup Verification Script - Gemini Version
+Checks if all dependencies and services are properly configured for Gemini API
 """
 import sys
 import subprocess
@@ -28,8 +28,8 @@ def check_python_version():
 
 
 def check_ollama():
-    """Check if Ollama is running and models are available"""
-    print("\n🤖 Checking Ollama...")
+    """Check if Ollama is running and embedding model is available"""
+    print("\n🤖 Checking Ollama (for embeddings)...")
     
     try:
         response = requests.get("http://localhost:11434/api/tags", timeout=5)
@@ -39,14 +39,14 @@ def check_ollama():
             models = response.json().get('models', [])
             model_names = [m['name'] for m in models]
             
-            # Check for required models
-            required_models = ['deepseek-r1:14b', 'nomic-embed-text']
-            for model in required_models:
-                if any(model in name for name in model_names):
-                    print(f"✅ Model '{model}' is installed")
-                else:
-                    print(f"❌ Model '{model}' is NOT installed")
-                    print(f"   Install with: ollama pull {model}")
+            # Check for embedding model only
+            required_model = 'nomic-embed-text'
+            if any(required_model in name for name in model_names):
+                print(f"✅ Embedding model '{required_model}' is installed")
+            else:
+                print(f"❌ Embedding model '{required_model}' is NOT installed")
+                print(f"   Install with: ollama pull {required_model}")
+                return False
             
             return True
         else:
@@ -58,6 +58,66 @@ def check_ollama():
         return False
     except Exception as e:
         print(f"❌ Error checking Ollama: {e}")
+        return False
+
+
+def check_gemini_api():
+    """Check Gemini API connection"""
+    print("\n🌟 Checking Google Gemini API...")
+    
+    try:
+        from dotenv import load_dotenv
+        import os
+        
+        load_dotenv()
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-latest")
+        
+        if not gemini_api_key:
+            print("❌ GEMINI_API_KEY not found in .env")
+            print("   Get your API key from: https://aistudio.google.com/")
+            return False
+        
+        if gemini_api_key == "your_gemini_api_key_here":
+            print("❌ GEMINI_API_KEY not updated in .env")
+            print("   Replace 'your_gemini_api_key_here' with your actual API key")
+            print("   Get it from: https://aistudio.google.com/")
+            return False
+        
+        # Test API connection
+        print(f"   Model: {gemini_model}")
+        print(f"   API Key: {'*' * 20}{gemini_api_key[-8:]}")
+        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent"
+        headers = {"Content-Type": "application/json"}
+        
+        payload = {
+            "contents": [
+                {"role": "user", "parts": [{"text": "Hello"}]}
+            ]
+        }
+        
+        response = requests.post(
+            f"{url}?key={gemini_api_key}",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            print("✅ Successfully connected to Gemini API")
+            return True
+        elif response.status_code == 400:
+            error_data = response.json()
+            print(f"❌ Invalid API key or request: {error_data.get('error', {}).get('message', 'Unknown error')}")
+            return False
+        else:
+            print(f"❌ Gemini API error: {response.status_code}")
+            print(f"   {response.text[:200]}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error checking Gemini API: {e}")
         return False
 
 
@@ -98,10 +158,11 @@ def check_env_file():
         return False
     
     required_vars = [
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
         "QDRANT_URL",
         "QDRANT_API_KEY",
         "OLLAMA_BASE_URL",
-        "LLM_MODEL",
         "EMBEDDING_MODEL"
     ]
     
@@ -151,11 +212,12 @@ def check_qdrant():
 
 def main():
     """Run all checks"""
-    print_header("🏥 Medical Center AI Chatbot - Setup Verification")
+    print_header("🏥 Medical Center AI Chatbot - Setup Verification (Gemini)")
     
     checks = [
         ("Python Version", check_python_version),
-        ("Ollama Service", check_ollama),
+        ("Ollama Service (Embeddings)", check_ollama),
+        ("Google Gemini API", check_gemini_api),
         ("Data Files", check_data_files),
         ("Environment Variables", check_env_file),
         ("Qdrant Connection", check_qdrant)
@@ -186,10 +248,25 @@ def main():
         print("\n✅ All checks passed! You're ready to run the application.")
         print("\n📝 Next steps:")
         print("   1. Index documents: python index_documents.py")
-        print("   2. Start application: python app.py")
+        print("   2. Start application: python src/app.py")
         print("   3. Open browser: http://localhost:5000")
     else:
         print("\n⚠️  Some checks failed. Please address the issues above.")
+        
+        # Specific guidance
+        for name, result in results:
+            if not result:
+                if "Gemini" in name:
+                    print("\n💡 Gemini API Setup:")
+                    print("   1. Visit: https://aistudio.google.com/")
+                    print("   2. Click 'Get API key' → 'Create API key'")
+                    print("   3. Copy your API key")
+                    print("   4. Update .env: GEMINI_API_KEY=your_actual_key")
+                elif "Ollama" in name:
+                    print("\n💡 Ollama Setup:")
+                    print("   1. Install: https://ollama.ai/")
+                    print("   2. Start: ollama serve")
+                    print("   3. Pull model: ollama pull nomic-embed-text")
     
     print("\n" + "="*70)
 
